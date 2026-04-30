@@ -369,20 +369,6 @@ git push origin main --tags
 The release workflow builds prebuilt binaries, uploads release assets, and
 generates `SHA256SUMS`. Manual release runs should use an existing tag.
 
-## Not Included Yet
-
-The v0.1 MVP intentionally does not include:
-
-- Multi-provider support
-- Public dashboard
-- Report generation
-- Queue management commands
-- Contribution toggles
-- Ingestion endpoint configuration
-- Auto-renting
-- Workload execution
-- Twitter/X automation
-
 ## License
 
 Capacitor is open source under the [Apache License 2.0](./LICENSE).

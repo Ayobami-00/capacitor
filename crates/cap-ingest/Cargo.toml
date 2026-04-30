@@ -1,0 +1,21 @@
+[package]
+name = "cap-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+cap-core = { path = "../cap-core" }
+reqwest.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[features]
+test-support = []
+
+[dev-dependencies]
+tokio.workspace = true
+uuid.workspace = true

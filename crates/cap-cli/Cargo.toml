@@ -1,0 +1,30 @@
+[package]
+name = "cap-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cap"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+cap-cache = { path = "../cap-cache" }
+cap-core = { path = "../cap-core" }
+cap-ingest = { path = "../cap-ingest" }
+cap-providers = { path = "../cap-providers" }
+chrono.workspace = true
+clap.workspace = true
+comfy-table.workspace = true
+directories.workspace = true
+keyring.workspace = true
+serde.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+

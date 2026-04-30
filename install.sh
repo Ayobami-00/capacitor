@@ -42,15 +42,17 @@ detect_target() {
     Darwin:arm64 | Darwin:aarch64)
       printf '%s\n' "aarch64-apple-darwin"
       ;;
-    Darwin:x86_64)
-      printf '%s\n' "x86_64-apple-darwin"
-      ;;
     Linux:x86_64 | Linux:amd64)
       printf '%s\n' "x86_64-unknown-linux-gnu"
       ;;
+    Darwin:x86_64)
+      err "prebuilt binaries are currently unavailable for macOS Intel"
+      err "install with Cargo or build from source instead"
+      exit 1
+      ;;
     *)
       err "unsupported platform: ${os}/${arch}"
-      err "supported targets: aarch64-apple-darwin, x86_64-apple-darwin, x86_64-unknown-linux-gnu"
+      err "supported targets: aarch64-apple-darwin, x86_64-unknown-linux-gnu"
       exit 1
       ;;
   esac

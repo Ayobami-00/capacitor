@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use cap_cache::ObservationCache;
-use cap_core::{IngestBatch, InstallRegistration, WatchSpec, score_deal};
+use cap_core::{IngestBatch, InstallRegistration, OfferObservation, WatchSpec, score_deal};
 use cap_ingest::IngestClient;
-use cap_providers::{ProviderConfig, ProviderRegistry, available_providers};
+use cap_providers::{Provider, ProviderConfig, ProviderRegistry, available_providers};
 use clap::{Args, Parser, Subcommand};
 use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use directories::ProjectDirs;
@@ -22,6 +22,7 @@ const LEGACY_PROVIDER_VAST_USER: &str = "provider.vast";
 const LEGACY_VAST_API_KEY_USER: &str = "vast.api-key";
 const INGEST_TOKEN_USER: &str = "ingest.token";
 const BETA_TOKEN_USER: &str = "beta.token";
+const DEFAULT_PROVIDER: &str = "vast";
 
 #[derive(Parser, Debug)]
 #[command(name = "cap")]
@@ -70,8 +71,11 @@ enum ConfigSubcommand {
 #[derive(Args, Debug)]
 struct WatchArgs {
     /// Provider to watch.
-    #[arg(long, default_value = "vast")]
-    provider: String,
+    #[arg(long, conflicts_with = "providers")]
+    provider: Option<String>,
+    /// Comma-separated providers to watch, for example: vast,lambda.
+    #[arg(long, value_name = "PROVIDERS", conflicts_with = "provider")]
+    providers: Option<String>,
     /// GPU name filter. Can be repeated.
     #[arg(long = "gpu", required = true)]
     gpu_filters: Vec<String>,
@@ -105,6 +109,11 @@ struct Paths {
 struct AppConfig {
     installation_id: Option<Uuid>,
     ingestion_registered: bool,
+}
+
+struct ProviderWatch {
+    spec: WatchSpec,
+    provider: Box<dyn Provider>,
 }
 
 impl Paths {
@@ -196,19 +205,17 @@ async fn watch(args: WatchArgs) -> Result<()> {
         save_config(&paths, &config)?;
     }
 
-    let spec = WatchSpec {
-        provider: args.provider,
-        gpu_filters: args.gpu_filters,
-        max_price: args.max_price,
-        verified: args.verified,
-        min_reliability: args.min_reliability,
-        min_gpus: args.min_gpus,
-        poll_interval_secs: args.poll_interval,
-    };
-    spec.validate()?;
-
-    let registry = ProviderRegistry::new(provider_config_for(&spec.provider)?);
-    let provider = registry.build(&spec.provider)?;
+    let provider_names =
+        resolve_provider_names(args.provider.as_deref(), args.providers.as_deref())?;
+    let specs = watch_specs_for(&args, &provider_names)?;
+    let registry = ProviderRegistry::new(provider_config_for(&provider_names)?);
+    let watches = specs
+        .into_iter()
+        .map(|spec| {
+            let provider = registry.build(&spec.provider)?;
+            Ok(ProviderWatch { spec, provider })
+        })
+        .collect::<Result<Vec<_>, cap_providers::ProviderError>>()?;
     let cache = ObservationCache::connect(&paths.cache_path).await?;
     let ingest = IngestClient::fixed()?;
 
@@ -219,8 +226,7 @@ async fn watch(args: WatchArgs) -> Result<()> {
         }
 
         if let Err(error) = run_watch_cycle(
-            &spec,
-            provider.as_ref(),
+            &watches,
             &cache,
             &ingest,
             config.installation_id.expect("installation id exists"),
@@ -234,30 +240,63 @@ async fn watch(args: WatchArgs) -> Result<()> {
             break;
         }
 
-        time::sleep(Duration::from_secs(spec.poll_interval_secs)).await;
+        time::sleep(Duration::from_secs(args.poll_interval)).await;
     }
 
     Ok(())
 }
 
 async fn run_watch_cycle(
-    spec: &WatchSpec,
-    provider: &dyn cap_providers::Provider,
+    watches: &[ProviderWatch],
     cache: &ObservationCache,
     ingest: &IngestClient,
     installation_id: Uuid,
 ) -> Result<()> {
-    let observations = provider.search(spec).await?;
+    let observations = collect_observations(watches).await?;
 
     if observations.is_empty() {
-        println!("No matching {} offers found.", spec.provider);
+        println!(
+            "No matching offers found for providers: {}.",
+            watches
+                .iter()
+                .map(|watch| watch.spec.provider.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     } else {
-        print_observations(spec, &observations);
+        print_observations(watches, &observations);
     }
 
     cache.insert_observations(&observations).await?;
     sync_cached_observations(cache, ingest, installation_id).await;
     Ok(())
+}
+
+async fn collect_observations(watches: &[ProviderWatch]) -> Result<Vec<OfferObservation>> {
+    let mut observations = Vec::new();
+    let mut failed_providers = Vec::new();
+
+    for watch in watches {
+        match watch.provider.search(&watch.spec).await {
+            Ok(provider_observations) => observations.extend(provider_observations),
+            Err(error) => {
+                println!(
+                    "Provider `{}` failed but other providers will continue: {error:#}",
+                    watch.spec.provider
+                );
+                failed_providers.push(watch.spec.provider.clone());
+            }
+        }
+    }
+
+    if failed_providers.len() == watches.len() {
+        return Err(anyhow!(
+            "all providers failed: {}",
+            failed_providers.join(", ")
+        ));
+    }
+
+    Ok(observations)
 }
 
 async fn sync_cached_observations(
@@ -379,28 +418,57 @@ async fn doctor() -> Result<()> {
     Ok(())
 }
 
-fn print_observations(spec: &WatchSpec, observations: &[cap_core::OfferObservation]) {
+fn print_observations(watches: &[ProviderWatch], observations: &[OfferObservation]) {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
-    table.set_header(vec![
-        "GPU",
-        "GPUs",
-        "$/hr",
-        "Reliability",
-        "Verified",
-        "Region",
-        "Deal",
-    ]);
+    let multi_provider = watches.len() > 1;
+    if multi_provider {
+        table.set_header(vec![
+            "Provider",
+            "GPU",
+            "GPUs",
+            "$/hr",
+            "Reliability",
+            "Verified",
+            "Region",
+            "Deal",
+        ]);
+    } else {
+        table.set_header(vec![
+            "GPU",
+            "GPUs",
+            "$/hr",
+            "Reliability",
+            "Verified",
+            "Region",
+            "Deal",
+        ]);
+    }
 
     for observation in observations {
+        let spec = watches
+            .iter()
+            .find(|watch| {
+                watch
+                    .spec
+                    .provider
+                    .eq_ignore_ascii_case(&observation.provider)
+            })
+            .map(|watch| &watch.spec)
+            .unwrap_or(&watches[0].spec);
         let deal = score_deal(spec, observation);
         let deal_label = if deal.deal_score >= 50.0 {
-            "\u{0007}interesting"
+            "interesting"
         } else {
             "match"
         };
 
-        table.add_row(vec![
+        let mut row = Vec::new();
+        if multi_provider {
+            row.push(Cell::new(&observation.provider));
+        }
+
+        row.extend(vec![
             Cell::new(&observation.gpu_name),
             Cell::new(observation.num_gpus),
             Cell::new(format!("{:.2}", observation.price_usd_per_hour)),
@@ -414,6 +482,7 @@ fn print_observations(spec: &WatchSpec, observations: &[cap_core::OfferObservati
             Cell::new(observation.region.as_deref().unwrap_or("unknown")),
             Cell::new(deal_label),
         ]);
+        table.add_row(row);
     }
 
     println!("{table}");
@@ -530,9 +599,73 @@ fn load_provider_secret(primary_user: &str, legacy_users: &[&str]) -> Result<Str
     Err(last_error)
 }
 
-fn provider_config_for(provider: &str) -> Result<ProviderConfig> {
-    match provider.to_ascii_lowercase().as_str() {
-        "vast" => {
+fn resolve_provider_names(provider: Option<&str>, providers: Option<&str>) -> Result<Vec<String>> {
+    if let Some(provider_list) = providers {
+        return parse_provider_list(provider_list);
+    }
+
+    let provider = provider.unwrap_or(DEFAULT_PROVIDER).trim();
+    if provider.eq_ignore_ascii_case("all") {
+        return Ok(available_providers()
+            .iter()
+            .map(|provider| provider.to_string())
+            .collect());
+    }
+
+    parse_provider_list(provider)
+}
+
+fn parse_provider_list(provider_list: &str) -> Result<Vec<String>> {
+    let mut providers = Vec::new();
+    for provider in provider_list.split(',') {
+        let provider = provider.trim();
+        if provider.is_empty() {
+            return Err(anyhow!("provider list contains an empty provider name"));
+        }
+
+        let provider = provider.to_ascii_lowercase();
+        if !available_providers().contains(&provider.as_str()) {
+            return Err(anyhow!(
+                "unknown provider `{provider}`; supported providers: {}",
+                provider_help()
+            ));
+        }
+
+        if !providers.contains(&provider) {
+            providers.push(provider);
+        }
+    }
+
+    if providers.is_empty() {
+        return Err(anyhow!("at least one provider is required"));
+    }
+
+    Ok(providers)
+}
+
+fn watch_specs_for(args: &WatchArgs, provider_names: &[String]) -> Result<Vec<WatchSpec>> {
+    provider_names
+        .iter()
+        .map(|provider| {
+            let spec = WatchSpec {
+                provider: provider.clone(),
+                gpu_filters: args.gpu_filters.clone(),
+                max_price: args.max_price,
+                verified: args.verified,
+                min_reliability: args.min_reliability,
+                min_gpus: args.min_gpus,
+                poll_interval_secs: args.poll_interval,
+            };
+            spec.validate()?;
+            Ok(spec)
+        })
+        .collect()
+}
+
+fn provider_config_for(providers: &[String]) -> Result<ProviderConfig> {
+    provider_config_for_with_loaders(
+        providers,
+        || {
             let vast_api_key = load_provider_secret(
                 VAST_API_KEY_USER,
                 &[LEGACY_PROVIDER_VAST_USER, LEGACY_VAST_API_KEY_USER],
@@ -540,24 +673,266 @@ fn provider_config_for(provider: &str) -> Result<ProviderConfig> {
             .context(
                 "missing Vast.ai API key; run `cap config set provider.vast.api-key <token>`",
             )?;
-            Ok(ProviderConfig {
-                vast_api_key: Some(vast_api_key),
-                ..ProviderConfig::default()
-            })
+            Ok(vast_api_key)
+        },
+        load_secret,
+    )
+}
+
+fn provider_config_for_with_loaders<V, L>(
+    providers: &[String],
+    load_vast_api_key: V,
+    load_secret_by_user: L,
+) -> Result<ProviderConfig>
+where
+    V: Fn() -> Result<String>,
+    L: Fn(&str) -> Result<String>,
+{
+    let mut config = ProviderConfig::default();
+
+    for provider in providers {
+        match provider.as_str() {
+            "vast" => {
+                config.vast_api_key = Some(load_vast_api_key()?);
+            }
+            "lambda" => {
+                config.lambda_api_key = Some(load_secret_by_user(LAMBDA_API_KEY_USER).context(
+                    "missing Lambda Cloud API key; run `cap config set provider.lambda.api-key <token>`",
+                )?);
+            }
+            _ => {
+                return Err(anyhow!(
+                    "unknown provider `{provider}`; supported providers: {}",
+                    provider_help()
+                ));
+            }
         }
-        "lambda" => {
-            let lambda_api_key = load_secret(LAMBDA_API_KEY_USER)
-                .context("missing Lambda Cloud API key; run `cap config set provider.lambda.api-key <token>`")?;
-            Ok(ProviderConfig {
-                lambda_api_key: Some(lambda_api_key),
-                ..ProviderConfig::default()
-            })
-        }
-        _ => Ok(ProviderConfig::default()),
     }
+
+    Ok(config)
 }
 
 #[allow(dead_code)]
 fn provider_help() -> String {
     available_providers().join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockProvider {
+        name: &'static str,
+        observations: Vec<OfferObservation>,
+        should_fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for MockProvider {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        async fn search(
+            &self,
+            _spec: &WatchSpec,
+        ) -> std::result::Result<Vec<OfferObservation>, cap_providers::ProviderError> {
+            if self.should_fail {
+                return Err(cap_providers::ProviderError::InvalidResponse(
+                    "mock failure".to_string(),
+                ));
+            }
+
+            Ok(self.observations.clone())
+        }
+    }
+
+    #[test]
+    fn provider_selection_defaults_to_vast() {
+        assert_eq!(
+            resolve_provider_names(None, None).unwrap(),
+            vec!["vast".to_string()]
+        );
+    }
+
+    #[test]
+    fn provider_selection_supports_all() {
+        assert_eq!(
+            resolve_provider_names(Some("all"), None).unwrap(),
+            available_providers()
+                .iter()
+                .map(|provider| provider.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn provider_selection_parses_deduped_lists() {
+        assert_eq!(
+            resolve_provider_names(None, Some(" vast,lambda,VAST ")).unwrap(),
+            vec!["vast".to_string(), "lambda".to_string()]
+        );
+    }
+
+    #[test]
+    fn provider_selection_rejects_unknown_provider() {
+        let error = resolve_provider_names(None, Some("vast,runpod")).unwrap_err();
+        assert!(error.to_string().contains("unknown provider `runpod`"));
+    }
+
+    #[test]
+    fn clap_rejects_provider_and_providers_together() {
+        let result = Cli::try_parse_from([
+            "cap",
+            "watch",
+            "--provider",
+            "vast",
+            "--providers",
+            "vast,lambda",
+            "--gpu",
+            "H100",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn provider_config_loads_only_selected_provider_secret() {
+        let config = provider_config_for_with_loaders(
+            &["lambda".to_string()],
+            || panic!("vast credential should not be loaded"),
+            |user| {
+                assert_eq!(user, LAMBDA_API_KEY_USER);
+                Ok("lambda-token".to_string())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(config.lambda_api_key.as_deref(), Some("lambda-token"));
+        assert!(config.vast_api_key.is_none());
+    }
+
+    #[test]
+    fn provider_config_loads_all_selected_provider_secrets() {
+        let config = provider_config_for_with_loaders(
+            &["vast".to_string(), "lambda".to_string()],
+            || Ok("vast-token".to_string()),
+            |_| Ok("lambda-token".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(config.vast_api_key.as_deref(), Some("vast-token"));
+        assert_eq!(config.lambda_api_key.as_deref(), Some("lambda-token"));
+    }
+
+    #[tokio::test]
+    async fn collect_observations_merges_provider_results() {
+        let watches = vec![
+            provider_watch(
+                "vast",
+                vec![test_observation("vast", "vast-offer", "H100 SXM", 1, 2.5)],
+                false,
+            ),
+            provider_watch(
+                "lambda",
+                vec![test_observation(
+                    "lambda",
+                    "gpu_1x_h100:us-east-1",
+                    "H100",
+                    1,
+                    4.29,
+                )],
+                false,
+            ),
+        ];
+
+        let observations = collect_observations(&watches).await.unwrap();
+
+        assert_eq!(observations.len(), 2);
+        assert!(observations.iter().any(|item| item.provider == "vast"));
+        assert!(observations.iter().any(|item| item.provider == "lambda"));
+    }
+
+    #[tokio::test]
+    async fn collect_observations_keeps_partial_results() {
+        let watches = vec![
+            provider_watch("vast", Vec::new(), true),
+            provider_watch(
+                "lambda",
+                vec![test_observation(
+                    "lambda",
+                    "gpu_1x_h100:us-east-1",
+                    "H100",
+                    1,
+                    4.29,
+                )],
+                false,
+            ),
+        ];
+
+        let observations = collect_observations(&watches).await.unwrap();
+
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].provider, "lambda");
+    }
+
+    #[tokio::test]
+    async fn collect_observations_errors_when_all_providers_fail() {
+        let watches = vec![
+            provider_watch("vast", Vec::new(), true),
+            provider_watch("lambda", Vec::new(), true),
+        ];
+
+        let error = collect_observations(&watches).await.unwrap_err();
+
+        assert!(error.to_string().contains("all providers failed"));
+    }
+
+    fn provider_watch(
+        provider: &'static str,
+        observations: Vec<OfferObservation>,
+        should_fail: bool,
+    ) -> ProviderWatch {
+        ProviderWatch {
+            spec: WatchSpec {
+                provider: provider.to_string(),
+                gpu_filters: vec!["H100".to_string()],
+                max_price: Some(10.0),
+                verified: false,
+                min_reliability: None,
+                min_gpus: None,
+                poll_interval_secs: 60,
+            },
+            provider: Box::new(MockProvider {
+                name: provider,
+                observations,
+                should_fail,
+            }),
+        }
+    }
+
+    fn test_observation(
+        provider: &str,
+        provider_offer_id: &str,
+        gpu_name: &str,
+        num_gpus: u32,
+        price_usd_per_hour: f64,
+    ) -> OfferObservation {
+        OfferObservation {
+            observation_id: Uuid::new_v4(),
+            observed_at: chrono::Utc::now(),
+            provider: provider.to_string(),
+            provider_offer_id: provider_offer_id.to_string(),
+            gpu_name: gpu_name.to_string(),
+            num_gpus,
+            gpu_ram_gb: Some(80.0),
+            price_usd_per_hour,
+            reliability_score: Some(1.0),
+            verified: true,
+            rentable: true,
+            region: Some("us-east-1".to_string()),
+            host_id_hash: None,
+            raw_provider_payload: serde_json::json!({}),
+        }
+    }
 }

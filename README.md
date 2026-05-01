@@ -3,27 +3,28 @@
 Capacitor is a Rust CLI agent for finding, reserving, and running workloads on
 scarce GPU capacity across cloud GPU providers.
 
-The v0.1 release is a capacity watcher: it monitors cloud GPU availability from
-your terminal, filters for the GPUs you care about, alerts when matching
+The current release is a capacity watcher: it monitors cloud GPU availability
+from your terminal, filters for the GPUs you care about, alerts when matching
 capacity appears, caches observations locally when offline, and contributes
 availability data to Capacitor's ingestion backend.
 
 ```bash
 cap watch \
-  --provider vast \
+  --providers vast,lambda \
   --gpu H100 \
-  --min-gpus 8 \
-  --max-price 24.00 \
+  --max-price 9.00 \
   --verified \
-  --min-reliability 0.98
+  --min-reliability 0.98 \
+  --once
 ```
 
 ## Status
 
 Capacitor is early and intentionally narrow.
 
-- Current release: `v0.1.0`
-- Current providers on `main`: Vast.ai, Lambda Cloud
+- Latest release: `v0.2.0`
+- Providers: Vast.ai, Lambda Cloud
+- Watch modes: single-provider and cross-provider
 - Current mode: private beta ingestion
 - License: Apache-2.0
 
@@ -74,7 +75,7 @@ x86_64-unknown-linux-gnu  # Linux x64
 
 Intel macOS users can still install Capacitor with Cargo or build from source.
 
-v0.1 binaries are unsigned and not notarized. On Linux, OS keychain support
+v0.2 binaries are unsigned and not notarized. On Linux, OS keychain support
 depends on a Secret Service-compatible keyring being available.
 
 ### Manual GitHub Release Download
@@ -208,6 +209,22 @@ Lambda Cloud is treated as first-party verified capacity. For Lambda
 observations, `--verified` matches and `--min-reliability` is evaluated against
 a reliability score of `1.0`.
 
+Watch across providers:
+
+```bash
+cap watch \
+  --providers vast,lambda \
+  --gpu H100 \
+  --max-price 9.00 \
+  --verified \
+  --min-reliability 0.98 \
+  --once
+```
+
+You can also use `--provider all` to watch every provider compiled into the
+CLI. Cross-provider output includes a provider column so offers can be compared
+in one table.
+
 ## Commands
 
 ### `cap init`
@@ -237,11 +254,15 @@ caches observations locally, and syncs observations to Capacitor ingestion.
 ```bash
 cap watch --provider vast --gpu H100
 cap watch --provider lambda --gpu H100 --min-gpus 8 --max-price 36.00
+cap watch --providers vast,lambda --gpu H100 --max-price 9.00 --once
+cap watch --provider all --gpu H100 --max-price 9.00 --once
 ```
 
 Useful filters:
 
 ```text
+--provider <name>             Provider to watch. Use all for every provider.
+--providers <names>           Comma-separated providers, for example vast,lambda.
 --gpu <name>                 GPU name filter. Can be repeated.
 --min-gpus <count>           Minimum number of GPUs in one offer.
 --max-price <usd>            Maximum total offer price per hour.
@@ -289,20 +310,16 @@ caches observations locally, and retries sync later.
 
 ## Example Output
 
-```text
-+----------+------+-------+-------------+----------+-------------+-------------+
-| GPU      | GPUs | $/hr | Reliability | Verified | Region      | Deal        |
-+----------+------+-------+-------------+----------+-------------+-------------+
-| H100 NVL | 1    | 1.76 | 0.995       | true     | Florida, US | interesting |
-+----------+------+-------+-------------+----------+-------------+-------------+
-```
+Cross-provider watches merge normalized observations into one comparable table:
+
+![Cross-provider watch output](assets/screenshots/cross-provider-watch.png)
 
 ## Architecture
 
 ```text
 cap watch
   -> provider registry
-  -> Vast.ai or Lambda Cloud provider implementation
+  -> one or more provider implementations
   -> normalized OfferObservation records
   -> terminal alert
   -> local SQLite cache
@@ -320,19 +337,17 @@ crates/
   cap-ingest     # fixed Capacitor ingestion API client
 ```
 
-## v0.1.0 Release
+## v0.2.0 Release
 
-The v0.1.0 release establishes the first complete capacity-watching loop:
+The v0.2.0 release adds multi-provider capacity watching:
 
-- Rust workspace and `cap` binary
-- Vast.ai provider support
-- Terminal watch command
+- Vast.ai and Lambda Cloud provider support
+- Cross-provider watches with `--providers vast,lambda`
+- `--provider all` for watching every compiled-in provider
+- Combined output tables with provider labels
 - GPU, GPU-count, price, verification, and reliability filters
-- Local SQLite observation cache
-- Fixed Capacitor ingestion client
-- Keychain storage for provider and ingestion credentials
-- Private beta registration via `cap init --beta-token`
-- GitHub Release binaries for macOS Apple Silicon, macOS Intel, and Linux x64
+- Local SQLite observation cache and Capacitor ingestion sync
+- GitHub Release binaries for macOS Apple Silicon and Linux x64
 - `install.sh` for installing without Rust/Cargo
 
 See [CHANGELOG.md](./CHANGELOG.md) for release notes.
@@ -349,21 +364,21 @@ This roadmap is directional and may change as Capacitor learns from real usage.
 - Cache observations locally when offline
 - Upload GPU availability observations to Capacitor ingestion
 
-### v0.3: Provider Expansion
+### v0.2: Provider Expansion
 
 - Add support for more cloud GPU providers
 - Normalize provider-specific capacity into one shared observation model
 - Compare GPU availability and pricing across providers
 - Keep the CLI provider-agnostic as new integrations are added
 
-### v0.4: Reservation Workflow
+### v0.3: Reservation Workflow
 
 - Reserve matching GPU capacity from the CLI
 - Add confirmation and dry-run flows before spending money
 - Track reservation attempts and outcomes
 - Make the jump from "capacity found" to "capacity claimed" safer
 
-### v0.5: Workload Runner
+### v0.4: Workload Runner
 
 - Run containerized workloads on reserved GPUs
 - Stream logs and collect workload results
@@ -391,7 +406,7 @@ cargo run --bin cap -- --help
 Create a release:
 
 ```bash
-git tag v0.1.0
+git tag v0.2.0
 git push origin main --tags
 ```
 

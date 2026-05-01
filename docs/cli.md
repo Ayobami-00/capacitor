@@ -5,6 +5,14 @@ Capacitor's fixed ingestion API.
 
 ## Install
 
+Install the latest prebuilt release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ayobami-00/capacitor/main/install.sh | sh
+```
+
+Install from source:
+
 ```bash
 cargo install --git https://github.com/Ayobami-00/capacitor.git cap-cli --locked
 ```
@@ -23,6 +31,7 @@ cap config set provider.vast.api-key <token>
 cap config set provider.lambda.api-key <token>
 cap watch --provider vast --gpu H100 --min-gpus 8 --max-price 24.00 --verified --min-reliability 0.98
 cap watch --provider lambda --gpu H100 --min-gpus 8 --max-price 36.00 --verified --min-reliability 0.98
+cap watch --providers vast,lambda --gpu H100 --max-price 9.00 --once
 cap doctor
 ```
 
@@ -35,6 +44,8 @@ provider-agnostic command layer. Future providers should be added under
 Supported filters:
 
 ```text
+--provider <name>             Provider to watch. Use all for every provider.
+--providers <names>           Comma-separated providers, for example vast,lambda.
 --gpu <name>                 GPU name filter. Can be repeated.
 --min-gpus <count>           Minimum number of GPUs in one offer.
 --max-price <usd>            Maximum total offer price per hour.
@@ -50,11 +61,17 @@ Examples:
 cap watch --provider vast --gpu H100 --max-price 3.00 --verified --once
 cap watch --provider vast --gpu H100 --min-gpus 8 --max-price 24.00 --verified
 cap watch --provider lambda --gpu H100 --min-gpus 8 --max-price 36.00 --verified --once
+cap watch --providers vast,lambda --gpu H100 --max-price 9.00 --verified --once
+cap watch --provider all --gpu H100 --max-price 9.00 --verified --once
 ```
 
 Lambda Cloud is treated as first-party verified capacity, so `--verified` and
 `--min-reliability` can be used with Lambda watches even though Lambda does not
 expose marketplace host reliability fields.
+
+Cross-provider watches merge normalized observations into one table and add a
+provider column to make results comparable. `--max-price` remains the total
+offer or instance price per hour across providers.
 
 ## Not Included In The MVP
 

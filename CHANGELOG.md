@@ -2,7 +2,7 @@
 
 All notable changes to Capacitor will be documented in this file.
 
-## Unreleased
+## v0.2.0 - 2026-05-01
 
 ### Added
 
@@ -11,6 +11,14 @@ All notable changes to Capacitor will be documented in this file.
   keychain-backed Lambda credential storage.
 - Added Lambda instance type normalization into Capacitor's shared
   `OfferObservation` model.
+- Added cross-provider watch support with `--providers vast,lambda` and
+  `--provider all`.
+- Added combined cross-provider table output with provider labels.
+
+### Documentation
+
+- Added cross-provider watch screenshot and updated CLI docs for Lambda Cloud
+  and cross-provider watch support.
 
 ## v0.1.0 - 2026-04-30
 
@@ -33,8 +41,7 @@ Initial public CLI release.
 - Added local SQLite observation cache for retrying sync after outages.
 - Added fixed Capacitor ingestion client for registration and observation sync.
 - Added `cap doctor` for local setup and cache readiness checks.
-- Added GitHub Release binaries for macOS Apple Silicon, macOS Intel, and Linux
-  x64.
+- Added GitHub Release binaries for macOS Apple Silicon and Linux x64.
 - Added `install.sh` for installing `cap` without requiring Rust/Cargo.
 - Added data-sharing documentation and Apache-2.0 license.
 

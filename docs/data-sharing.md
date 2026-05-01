@@ -4,6 +4,10 @@
 This is part of the product: Capacitor builds public GPU market intelligence
 from observed availability, pricing, and provider metadata.
 
+Single-provider and cross-provider watch commands use the same data-sharing
+path. Cross-provider watches merge normalized observations locally before they
+are cached and synced.
+
 Capacitor does not upload your Vast.ai or Lambda Cloud API keys. Provider
 credentials are stored locally in the operating system keychain.
 

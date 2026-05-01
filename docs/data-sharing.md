@@ -4,8 +4,8 @@
 This is part of the product: Capacitor builds public GPU market intelligence
 from observed availability, pricing, and provider metadata.
 
-Capacitor does not upload your Vast.ai API key. Provider credentials are stored
-locally in the operating system keychain.
+Capacitor does not upload your Vast.ai or Lambda Cloud API keys. Provider
+credentials are stored locally in the operating system keychain.
 
 Private beta registration uses `cap init --beta-token <token>`. The beta token
 and backend-minted ingest token are also stored locally in the operating system

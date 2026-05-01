@@ -2,6 +2,16 @@
 
 All notable changes to Capacitor will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- Added Lambda Cloud watch support through `--provider lambda`.
+- Added `cap config set provider.lambda.api-key <token>` for OS
+  keychain-backed Lambda credential storage.
+- Added Lambda instance type normalization into Capacitor's shared
+  `OfferObservation` model.
+
 ## v0.1.0 - 2026-04-30
 
 Initial public CLI release.

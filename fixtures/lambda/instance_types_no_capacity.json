@@ -1,0 +1,19 @@
+{
+  "data": {
+    "gpu_8x_h100_sxm5": {
+      "instance_type": {
+        "name": "gpu_8x_h100_sxm5",
+        "description": "8x NVIDIA H100 SXM",
+        "gpu_description": "NVIDIA H100 SXM",
+        "price_cents_per_hour": 3192,
+        "specs": {
+          "vcpus": 208,
+          "memory_gib": 1800,
+          "storage_gib": 22000,
+          "gpus": 8
+        }
+      },
+      "regions_with_capacity_available": []
+    }
+  }
+}

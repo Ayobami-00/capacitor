@@ -1,8 +1,9 @@
+use crate::lambda::LambdaProvider;
 use crate::provider::{Provider, ProviderConfig, ProviderError};
 use crate::vast::VastProvider;
 
 pub fn available_providers() -> &'static [&'static str] {
-    &["vast"]
+    &["vast", "lambda"]
 }
 
 pub struct ProviderRegistry {
@@ -16,6 +17,14 @@ impl ProviderRegistry {
 
     pub fn build(&self, name: &str) -> Result<Box<dyn Provider>, ProviderError> {
         match name.to_ascii_lowercase().as_str() {
+            "lambda" => {
+                let api_key = self
+                    .config
+                    .lambda_api_key
+                    .clone()
+                    .ok_or(ProviderError::MissingCredential("lambda"))?;
+                Ok(Box::new(LambdaProvider::new(api_key)))
+            }
             "vast" => {
                 let api_key = self
                     .config
@@ -36,6 +45,7 @@ mod tests {
     #[test]
     fn resolves_vast_provider() {
         let registry = ProviderRegistry::new(ProviderConfig {
+            lambda_api_key: None,
             vast_api_key: Some("test-token".to_string()),
         });
 
@@ -43,10 +53,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_provider() {
+    fn resolves_lambda_provider() {
+        let registry = ProviderRegistry::new(ProviderConfig {
+            lambda_api_key: Some("test-token".to_string()),
+            vast_api_key: None,
+        });
+
+        assert_eq!(registry.build("lambda").unwrap().name(), "lambda");
+    }
+
+    #[test]
+    fn rejects_lambda_without_api_key() {
         let registry = ProviderRegistry::new(ProviderConfig::default());
 
         match registry.build("lambda") {
+            Err(ProviderError::MissingCredential("lambda")) => {}
+            other => panic!(
+                "expected missing lambda credential error, got success={}",
+                other.is_ok()
+            ),
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_provider() {
+        let registry = ProviderRegistry::new(ProviderConfig::default());
+
+        match registry.build("runpod") {
             Err(ProviderError::UnknownProvider(_)) => {}
             other => panic!("expected unknown provider error, got {}", other.is_ok()),
         }

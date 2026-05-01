@@ -1,3 +1,4 @@
+pub mod lambda;
 pub mod provider;
 pub mod registry;
 pub mod vast;

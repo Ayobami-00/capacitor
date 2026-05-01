@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 const SERVICE_NAME: &str = "capacitor";
 const VAST_API_KEY_USER: &str = "provider.vast.api-key";
+const LAMBDA_API_KEY_USER: &str = "provider.lambda.api-key";
 const LEGACY_PROVIDER_VAST_USER: &str = "provider.vast";
 const LEGACY_VAST_API_KEY_USER: &str = "vast.api-key";
 const INGEST_TOKEN_USER: &str = "ingest.token";
@@ -59,7 +60,7 @@ struct ConfigCommand {
 enum ConfigSubcommand {
     /// Store a supported config value.
     Set {
-        /// Supported key: provider.vast.api-key
+        /// Supported keys: provider.vast.api-key, provider.lambda.api-key
         key: String,
         /// Value to store.
         value: String,
@@ -171,8 +172,13 @@ async fn config(command: ConfigCommand) -> Result<()> {
             println!("Stored Vast.ai API key in the OS keychain.");
             Ok(())
         }
+        ConfigSubcommand::Set { key, value } if key == LAMBDA_API_KEY_USER => {
+            store_secret(LAMBDA_API_KEY_USER, &value)?;
+            println!("Stored Lambda Cloud API key in the OS keychain.");
+            Ok(())
+        }
         ConfigSubcommand::Set { key, .. } => Err(anyhow!(
-            "unsupported config key `{key}`; supported key: provider.vast.api-key"
+            "unsupported config key `{key}`; supported keys: provider.vast.api-key, provider.lambda.api-key"
         )),
     }
 }
@@ -201,14 +207,7 @@ async fn watch(args: WatchArgs) -> Result<()> {
     };
     spec.validate()?;
 
-    let vast_api_key = load_provider_secret(
-        VAST_API_KEY_USER,
-        &[LEGACY_PROVIDER_VAST_USER, LEGACY_VAST_API_KEY_USER],
-    )
-    .context("missing Vast.ai API key; run `cap config set provider.vast.api-key <token>`")?;
-    let registry = ProviderRegistry::new(ProviderConfig {
-        vast_api_key: Some(vast_api_key),
-    });
+    let registry = ProviderRegistry::new(provider_config_for(&spec.provider)?);
     let provider = registry.build(&spec.provider)?;
     let cache = ObservationCache::connect(&paths.cache_path).await?;
     let ingest = IngestClient::fixed()?;
@@ -343,6 +342,10 @@ async fn doctor() -> Result<()> {
             )
             .is_ok(),
         ),
+    ]);
+    table.add_row(vec![
+        Cell::new("Lambda Cloud API key"),
+        status_cell(load_secret(LAMBDA_API_KEY_USER).is_ok()),
     ]);
     table.add_row(vec![
         Cell::new("Ingestion token"),
@@ -525,6 +528,33 @@ fn load_provider_secret(primary_user: &str, legacy_users: &[&str]) -> Result<Str
     }
 
     Err(last_error)
+}
+
+fn provider_config_for(provider: &str) -> Result<ProviderConfig> {
+    match provider.to_ascii_lowercase().as_str() {
+        "vast" => {
+            let vast_api_key = load_provider_secret(
+                VAST_API_KEY_USER,
+                &[LEGACY_PROVIDER_VAST_USER, LEGACY_VAST_API_KEY_USER],
+            )
+            .context(
+                "missing Vast.ai API key; run `cap config set provider.vast.api-key <token>`",
+            )?;
+            Ok(ProviderConfig {
+                vast_api_key: Some(vast_api_key),
+                ..ProviderConfig::default()
+            })
+        }
+        "lambda" => {
+            let lambda_api_key = load_secret(LAMBDA_API_KEY_USER)
+                .context("missing Lambda Cloud API key; run `cap config set provider.lambda.api-key <token>`")?;
+            Ok(ProviderConfig {
+                lambda_api_key: Some(lambda_api_key),
+                ..ProviderConfig::default()
+            })
+        }
+        _ => Ok(ProviderConfig::default()),
+    }
 }
 
 #[allow(dead_code)]

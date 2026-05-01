@@ -3,10 +3,10 @@
 Capacitor is a Rust CLI agent for finding, reserving, and running workloads on
 scarce GPU capacity across cloud GPU providers.
 
-The v0.1 release is a capacity watcher: it monitors Vast.ai offers from your
-terminal, filters for the GPUs you care about, alerts when matching capacity
-appears, caches observations locally when offline, and contributes availability
-data to Capacitor's ingestion backend.
+The v0.1 release is a capacity watcher: it monitors cloud GPU availability from
+your terminal, filters for the GPUs you care about, alerts when matching
+capacity appears, caches observations locally when offline, and contributes
+availability data to Capacitor's ingestion backend.
 
 ```bash
 cap watch \
@@ -23,7 +23,7 @@ cap watch \
 Capacitor is early and intentionally narrow.
 
 - Current release: `v0.1.0`
-- Current provider: Vast.ai
+- Current providers on `main`: Vast.ai, Lambda Cloud
 - Current mode: private beta ingestion
 - License: Apache-2.0
 
@@ -33,7 +33,8 @@ patterns.
 
 ## What It Does Today
 
-- Watches Vast.ai offers from the terminal
+- Watches Vast.ai offers and Lambda Cloud instance availability from the
+  terminal
 - Filters by GPU name, GPU count, total price, verification status, and
   reliability
 - Prints matching offers in a terminal table
@@ -121,10 +122,12 @@ cap --help
 
 ## Quickstart
 
-During the private beta, Capacitor v0.1 requires two tokens:
+During the private beta, Capacitor requires a Capacitor beta token and at least
+one provider API key.
 
 - A Capacitor beta token for ingestion registration
-- A Vast.ai API key for reading Vast.ai offers
+- A Vast.ai API key for reading Vast.ai offers, or a Lambda Cloud API key for
+  reading Lambda instance availability
 
 Initialize Capacitor:
 
@@ -136,6 +139,12 @@ Store your Vast.ai API key:
 
 ```bash
 cap config set provider.vast.api-key <vast-api-key>
+```
+
+Or store your Lambda Cloud API key:
+
+```bash
+cap config set provider.lambda.api-key <lambda-api-key>
 ```
 
 Check local setup:
@@ -182,6 +191,23 @@ cap watch \
 
 `--max-price` is the total offer price per hour, not per-GPU price.
 
+Watch Lambda Cloud for 8xH100 capacity:
+
+```bash
+cap watch \
+  --provider lambda \
+  --gpu H100 \
+  --min-gpus 8 \
+  --max-price 36.00 \
+  --verified \
+  --min-reliability 0.98 \
+  --once
+```
+
+Lambda Cloud is treated as first-party verified capacity. For Lambda
+observations, `--verified` matches and `--min-reliability` is evaluated against
+a reliability score of `1.0`.
+
 ## Commands
 
 ### `cap init`
@@ -200,6 +226,7 @@ Stores supported provider credentials in the OS keychain.
 
 ```bash
 cap config set provider.vast.api-key <vast-api-key>
+cap config set provider.lambda.api-key <lambda-api-key>
 ```
 
 ### `cap watch`
@@ -209,6 +236,7 @@ caches observations locally, and syncs observations to Capacitor ingestion.
 
 ```bash
 cap watch --provider vast --gpu H100
+cap watch --provider lambda --gpu H100 --min-gpus 8 --max-price 36.00
 ```
 
 Useful filters:
@@ -238,10 +266,10 @@ cap doctor
 API. This is part of the product: Capacitor is building public GPU market
 intelligence from observed availability, pricing, and provider metadata.
 
-Capacitor does not upload your Vast.ai API key. Provider credentials are stored
-locally in your operating system keychain. The Capacitor beta token and
-backend-minted ingest token are also stored in the keychain so registration and
-sync can retry after temporary outages.
+Capacitor does not upload your Vast.ai or Lambda Cloud API keys. Provider
+credentials are stored locally in your operating system keychain. The Capacitor
+beta token and backend-minted ingest token are also stored in the keychain so
+registration and sync can retry after temporary outages.
 
 Uploaded observations may include:
 
@@ -274,7 +302,7 @@ caches observations locally, and retries sync later.
 ```text
 cap watch
   -> provider registry
-  -> Vast.ai provider implementation
+  -> Vast.ai or Lambda Cloud provider implementation
   -> normalized OfferObservation records
   -> terminal alert
   -> local SQLite cache
@@ -287,7 +315,7 @@ Workspace crates:
 crates/
   cap-cli        # binary: cap
   cap-core       # shared domain models, validation, scoring, ingest payloads
-  cap-providers  # provider trait, registry, and Vast.ai implementation
+  cap-providers  # provider trait, registry, and provider implementations
   cap-cache      # local SQLite cache for pending observation sync
   cap-ingest     # fixed Capacitor ingestion API client
 ```
@@ -315,7 +343,7 @@ This roadmap is directional and may change as Capacitor learns from real usage.
 
 ### v0.1: Capacity Watcher
 
-- Watch Vast.ai offers from the terminal
+- Watch cloud GPU capacity from the terminal
 - Filter by GPU, GPU count, price, verification status, and reliability
 - Alert locally when matching capacity appears
 - Cache observations locally when offline

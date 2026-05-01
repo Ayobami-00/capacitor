@@ -20,15 +20,17 @@ cargo run --bin cap -- --help
 ```bash
 cap init --beta-token <token>
 cap config set provider.vast.api-key <token>
+cap config set provider.lambda.api-key <token>
 cap watch --provider vast --gpu H100 --min-gpus 8 --max-price 24.00 --verified --min-reliability 0.98
+cap watch --provider lambda --gpu H100 --min-gpus 8 --max-price 36.00 --verified --min-reliability 0.98
 cap doctor
 ```
 
 ## `cap watch`
 
-`cap watch` currently supports Vast.ai through the provider-agnostic command
-layer. Future providers should be added under `cap-providers` rather than as new
-CLI commands.
+`cap watch` currently supports Vast.ai and Lambda Cloud through the
+provider-agnostic command layer. Future providers should be added under
+`cap-providers` rather than as new CLI commands.
 
 Supported filters:
 
@@ -47,7 +49,12 @@ Examples:
 ```bash
 cap watch --provider vast --gpu H100 --max-price 3.00 --verified --once
 cap watch --provider vast --gpu H100 --min-gpus 8 --max-price 24.00 --verified
+cap watch --provider lambda --gpu H100 --min-gpus 8 --max-price 36.00 --verified --once
 ```
+
+Lambda Cloud is treated as first-party verified capacity, so `--verified` and
+`--min-reliability` can be used with Lambda watches even though Lambda does not
+expose marketplace host reliability fields.
 
 ## Not Included In The MVP
 

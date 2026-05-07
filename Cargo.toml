@@ -13,7 +13,7 @@ authors = ["Capacitor contributors"]
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/Ayobami-00/capacitor"
-version = "0.2.0"
+version = "0.2.1"
 
 [workspace.dependencies]
 anyhow = "1"

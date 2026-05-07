@@ -10,7 +10,7 @@ availability data to Capacitor's ingestion backend.
 
 ```bash
 cap watch \
-  --providers vast,lambda \
+  --providers vast,lambda,runpod \
   --gpu H100 \
   --max-price 9.00 \
   --verified \
@@ -22,8 +22,8 @@ cap watch \
 
 Capacitor is early and intentionally narrow.
 
-- Latest release: `v0.2.0`
-- Providers: Vast.ai, Lambda Cloud
+- Latest release: `v0.2.1`
+- Providers: Vast.ai, Lambda Cloud, Runpod
 - Watch modes: single-provider and cross-provider
 - Current mode: private beta ingestion
 - License: Apache-2.0
@@ -34,15 +34,16 @@ patterns.
 
 ## What It Does Today
 
-- Watches Vast.ai offers and Lambda Cloud instance availability from the
-  terminal
+- Watches Vast.ai offers, Lambda Cloud instance availability, and Runpod Secure
+  Cloud GPU types from the terminal
 - Filters by GPU name, GPU count, total price, verification status, and
   reliability
 - Prints matching offers in a terminal table
 - Highlights interesting deals
 - Caches observations locally in SQLite when sync is unavailable
 - Uploads GPU availability observations to Capacitor ingestion
-- Keeps provider credentials in your operating system keychain
+- Keeps provider credentials in your operating system keychain, with
+  container-friendly environment and file-backed fallbacks
 
 ## Install
 
@@ -127,8 +128,7 @@ During the private beta, Capacitor requires a Capacitor beta token and at least
 one provider API key.
 
 - A Capacitor beta token for ingestion registration
-- A Vast.ai API key for reading Vast.ai offers, or a Lambda Cloud API key for
-  reading Lambda instance availability
+- A Vast.ai, Lambda Cloud, or Runpod API key for reading provider availability
 
 Initialize Capacitor:
 
@@ -146,6 +146,12 @@ Or store your Lambda Cloud API key:
 
 ```bash
 cap config set provider.lambda.api-key <lambda-api-key>
+```
+
+Or store your Runpod API key:
+
+```bash
+cap config set provider.runpod.api-key <runpod-api-key>
 ```
 
 Check local setup:
@@ -209,11 +215,27 @@ Lambda Cloud is treated as first-party verified capacity. For Lambda
 observations, `--verified` matches and `--min-reliability` is evaluated against
 a reliability score of `1.0`.
 
+Watch Runpod Secure Cloud for 8xH100 capacity:
+
+```bash
+cap watch \
+  --provider runpod \
+  --gpu H100 \
+  --min-gpus 8 \
+  --max-price 36.00 \
+  --verified \
+  --min-reliability 0.98 \
+  --once
+```
+
+Runpod support is Secure Cloud first. Runpod observations are treated as
+verified capacity, and `--max-price` is normalized to total hourly price.
+
 Watch across providers:
 
 ```bash
 cap watch \
-  --providers vast,lambda \
+  --providers vast,lambda,runpod \
   --gpu H100 \
   --max-price 9.00 \
   --verified \
@@ -224,6 +246,17 @@ cap watch \
 You can also use `--provider all` to watch every provider compiled into the
 CLI. Cross-provider output includes a provider column so offers can be compared
 in one table.
+
+For automation, emit machine-readable JSON:
+
+```bash
+cap watch \
+  --providers vast,lambda,runpod \
+  --gpu H100 \
+  --max-price 9.00 \
+  --once \
+  --format json
+```
 
 ## Commands
 
@@ -244,6 +277,7 @@ Stores supported provider credentials in the OS keychain.
 ```bash
 cap config set provider.vast.api-key <vast-api-key>
 cap config set provider.lambda.api-key <lambda-api-key>
+cap config set provider.runpod.api-key <runpod-api-key>
 ```
 
 ### `cap watch`
@@ -254,7 +288,8 @@ caches observations locally, and syncs observations to Capacitor ingestion.
 ```bash
 cap watch --provider vast --gpu H100
 cap watch --provider lambda --gpu H100 --min-gpus 8 --max-price 36.00
-cap watch --providers vast,lambda --gpu H100 --max-price 9.00 --once
+cap watch --provider runpod --gpu H100 --min-gpus 8 --max-price 36.00
+cap watch --providers vast,lambda,runpod --gpu H100 --max-price 9.00 --once
 cap watch --provider all --gpu H100 --max-price 9.00 --once
 ```
 
@@ -262,7 +297,7 @@ Useful filters:
 
 ```text
 --provider <name>             Provider to watch. Use all for every provider.
---providers <names>           Comma-separated providers, for example vast,lambda.
+--providers <names>           Comma-separated providers, for example vast,lambda,runpod.
 --gpu <name>                 GPU name filter. Can be repeated.
 --min-gpus <count>           Minimum number of GPUs in one offer.
 --max-price <usd>            Maximum total offer price per hour.
@@ -270,6 +305,7 @@ Useful filters:
 --min-reliability <score>    Minimum reliability score between 0 and 1.
 --poll-interval <seconds>    Poll interval. Minimum: 10 seconds.
 --once                       Run one poll cycle and exit.
+--format <table|json>        Output format. Defaults to table.
 ```
 
 ### `cap doctor`
@@ -287,10 +323,21 @@ cap doctor
 API. This is part of the product: Capacitor is building public GPU market
 intelligence from observed availability, pricing, and provider metadata.
 
-Capacitor does not upload your Vast.ai or Lambda Cloud API keys. Provider
-credentials are stored locally in your operating system keychain. The Capacitor
-beta token and backend-minted ingest token are also stored in the keychain so
-registration and sync can retry after temporary outages.
+Capacitor does not upload your Vast.ai, Lambda Cloud, or Runpod API keys. Provider
+credentials are stored locally in your operating system keychain by default.
+For containers and headless environments, the CLI can also read credentials
+from environment variables or local secret files.
+
+Container-friendly environment variables:
+
+```text
+CAP_PROVIDER_VAST_API_KEY
+CAP_PROVIDER_LAMBDA_API_KEY
+CAP_PROVIDER_RUNPOD_API_KEY
+CAPACITOR_BETA_TOKEN
+CAPACITOR_INGEST_TOKEN
+CAPACITOR_SECRET_DIR
+```
 
 Uploaded observations may include:
 
@@ -337,6 +384,20 @@ crates/
   cap-ingest     # fixed Capacitor ingestion API client
 ```
 
+## v0.2.1 Release
+
+The v0.2.1 release adds Runpod Secure Cloud watch support and automation
+improvements:
+
+- Runpod provider support through `--provider runpod`
+- Cross-provider watches with `--providers vast,lambda,runpod`
+- Runpod Secure Cloud GPU type normalization
+- `provider.runpod.api-key` and `CAP_PROVIDER_RUNPOD_API_KEY`
+- JSON output with `cap watch --format json`
+- Container-friendly credential fallbacks for Docker/headless environments
+
+See [CHANGELOG.md](./CHANGELOG.md) for release notes.
+
 ## v0.2.0 Release
 
 The v0.2.0 release adds multi-provider capacity watching:
@@ -364,21 +425,21 @@ This roadmap is directional and may change as Capacitor learns from real usage.
 - Cache observations locally when offline
 - Upload GPU availability observations to Capacitor ingestion
 
-### v0.2: Provider Expansion
+### v0.3: Provider Expansion
 
 - Add support for more cloud GPU providers
 - Normalize provider-specific capacity into one shared observation model
 - Compare GPU availability and pricing across providers
 - Keep the CLI provider-agnostic as new integrations are added
 
-### v0.3: Reservation Workflow
+### v0.4: Reservation Workflow
 
 - Reserve matching GPU capacity from the CLI
 - Add confirmation and dry-run flows before spending money
 - Track reservation attempts and outcomes
 - Make the jump from "capacity found" to "capacity claimed" safer
 
-### v0.4: Workload Runner
+### v0.5: Workload Runner
 
 - Run containerized workloads on reserved GPUs
 - Stream logs and collect workload results
@@ -406,7 +467,7 @@ cargo run --bin cap -- --help
 Create a release:
 
 ```bash
-git tag v0.2.0
+git tag v0.2.1
 git push origin main --tags
 ```
 

@@ -1,0 +1,32 @@
+{
+  "data": {
+    "gpuTypes": [
+      {
+        "id": "NVIDIA H100 80GB HBM3",
+        "displayName": "NVIDIA H100 80GB HBM3",
+        "memoryInGb": 80,
+        "lowestPrice": {
+          "gpuName": "NVIDIA H100 80GB HBM3",
+          "gpuTypeId": "NVIDIA H100 80GB HBM3",
+          "uninterruptablePrice": 4.29,
+          "stockStatus": "None",
+          "countryCode": "US",
+          "availableGpuCounts": []
+        }
+      },
+      {
+        "id": "NVIDIA H100 PCIe",
+        "displayName": "NVIDIA H100 PCIe",
+        "memoryInGb": 80,
+        "lowestPrice": {
+          "gpuName": "NVIDIA H100 PCIe",
+          "gpuTypeId": "NVIDIA H100 PCIe",
+          "uninterruptablePrice": null,
+          "stockStatus": "Low",
+          "countryCode": "US",
+          "availableGpuCounts": [8]
+        }
+      }
+    ]
+  }
+}

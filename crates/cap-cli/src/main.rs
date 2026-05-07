@@ -4,10 +4,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use cap_cache::ObservationCache;
-use cap_core::{IngestBatch, InstallRegistration, OfferObservation, WatchSpec, score_deal};
+use cap_core::{
+    DealCandidate, IngestBatch, IngestResult, InstallRegistration, OfferObservation, WatchSpec,
+    score_deal,
+};
 use cap_ingest::IngestClient;
 use cap_providers::{Provider, ProviderConfig, ProviderRegistry, available_providers};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use directories::ProjectDirs;
 use keyring::Entry;
@@ -18,11 +21,18 @@ use uuid::Uuid;
 const SERVICE_NAME: &str = "capacitor";
 const VAST_API_KEY_USER: &str = "provider.vast.api-key";
 const LAMBDA_API_KEY_USER: &str = "provider.lambda.api-key";
+const RUNPOD_API_KEY_USER: &str = "provider.runpod.api-key";
 const LEGACY_PROVIDER_VAST_USER: &str = "provider.vast";
 const LEGACY_VAST_API_KEY_USER: &str = "vast.api-key";
 const INGEST_TOKEN_USER: &str = "ingest.token";
 const BETA_TOKEN_USER: &str = "beta.token";
 const DEFAULT_PROVIDER: &str = "vast";
+const VAST_API_KEY_ENV: &str = "CAP_PROVIDER_VAST_API_KEY";
+const LAMBDA_API_KEY_ENV: &str = "CAP_PROVIDER_LAMBDA_API_KEY";
+const RUNPOD_API_KEY_ENV: &str = "CAP_PROVIDER_RUNPOD_API_KEY";
+const BETA_TOKEN_ENV: &str = "CAPACITOR_BETA_TOKEN";
+const INGEST_TOKEN_ENV: &str = "CAPACITOR_INGEST_TOKEN";
+const SECRET_DIR_ENV: &str = "CAPACITOR_SECRET_DIR";
 
 #[derive(Parser, Debug)]
 #[command(name = "cap")]
@@ -61,7 +71,7 @@ struct ConfigCommand {
 enum ConfigSubcommand {
     /// Store a supported config value.
     Set {
-        /// Supported keys: provider.vast.api-key, provider.lambda.api-key
+        /// Supported keys: provider.vast.api-key, provider.lambda.api-key, provider.runpod.api-key
         key: String,
         /// Value to store.
         value: String,
@@ -73,7 +83,7 @@ struct WatchArgs {
     /// Provider to watch.
     #[arg(long, conflicts_with = "providers")]
     provider: Option<String>,
-    /// Comma-separated providers to watch, for example: vast,lambda.
+    /// Comma-separated providers to watch, for example: vast,lambda,runpod.
     #[arg(long, value_name = "PROVIDERS", conflicts_with = "provider")]
     providers: Option<String>,
     /// GPU name filter. Can be repeated.
@@ -97,6 +107,50 @@ struct WatchArgs {
     /// Run one poll cycle and exit.
     #[arg(long)]
     once: bool,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    format: OutputFormat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum OutputFormat {
+    Table,
+    Json,
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Table => write!(formatter, "table"),
+            Self::Json => write!(formatter, "json"),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct WatchOutput {
+    providers: Vec<String>,
+    observations: Vec<WatchObservationOutput>,
+    sync: Option<IngestResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct WatchObservationOutput {
+    observation_id: Uuid,
+    observed_at: String,
+    provider: String,
+    provider_offer_id: String,
+    gpu_name: String,
+    num_gpus: u32,
+    gpu_ram_gb: Option<f64>,
+    price_usd_per_hour: f64,
+    reliability_score: Option<f64>,
+    verified: bool,
+    rentable: bool,
+    region: Option<String>,
+    deal_label: String,
+    deal_score: f64,
+    deal_reasons: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -165,7 +219,13 @@ async fn init(args: InitArgs) -> Result<()> {
     let beta_token = args
         .beta_token
         .or_else(|| load_secret(BETA_TOKEN_USER).ok());
-    try_register_installation(&paths, &mut config, beta_token.as_deref()).await;
+    try_register_installation(
+        &paths,
+        &mut config,
+        beta_token.as_deref(),
+        OutputFormat::Table,
+    )
+    .await;
 
     save_config(&paths, &config)?;
 
@@ -178,16 +238,21 @@ async fn config(command: ConfigCommand) -> Result<()> {
     match command.command {
         ConfigSubcommand::Set { key, value } if key == VAST_API_KEY_USER => {
             store_secret(VAST_API_KEY_USER, &value)?;
-            println!("Stored Vast.ai API key in the OS keychain.");
+            println!("Stored Vast.ai API key in local secret storage.");
             Ok(())
         }
         ConfigSubcommand::Set { key, value } if key == LAMBDA_API_KEY_USER => {
             store_secret(LAMBDA_API_KEY_USER, &value)?;
-            println!("Stored Lambda Cloud API key in the OS keychain.");
+            println!("Stored Lambda Cloud API key in local secret storage.");
+            Ok(())
+        }
+        ConfigSubcommand::Set { key, value } if key == RUNPOD_API_KEY_USER => {
+            store_secret(RUNPOD_API_KEY_USER, &value)?;
+            println!("Stored Runpod API key in local secret storage.");
             Ok(())
         }
         ConfigSubcommand::Set { key, .. } => Err(anyhow!(
-            "unsupported config key `{key}`; supported keys: provider.vast.api-key, provider.lambda.api-key"
+            "unsupported config key `{key}`; supported keys: provider.vast.api-key, provider.lambda.api-key, provider.runpod.api-key"
         )),
     }
 }
@@ -199,7 +264,10 @@ async fn watch(args: WatchArgs) -> Result<()> {
 
     let mut config = load_config(&paths)?;
     if config.installation_id.is_none() {
-        println!("No installation id found; running initialization first.");
+        notice(
+            args.format,
+            "No installation id found; running initialization first.",
+        );
         let installation_id = Uuid::new_v4();
         config.installation_id = Some(installation_id);
         save_config(&paths, &config)?;
@@ -222,7 +290,8 @@ async fn watch(args: WatchArgs) -> Result<()> {
     loop {
         if !config.ingestion_registered || load_secret(INGEST_TOKEN_USER).is_err() {
             let beta_token = load_secret(BETA_TOKEN_USER).ok();
-            try_register_installation(&paths, &mut config, beta_token.as_deref()).await;
+            try_register_installation(&paths, &mut config, beta_token.as_deref(), args.format)
+                .await;
         }
 
         if let Err(error) = run_watch_cycle(
@@ -230,10 +299,14 @@ async fn watch(args: WatchArgs) -> Result<()> {
             &cache,
             &ingest,
             config.installation_id.expect("installation id exists"),
+            args.format,
         )
         .await
         {
-            println!("watch cycle failed but will retry: {error:#}");
+            notice(
+                args.format,
+                format!("watch cycle failed but will retry: {error:#}"),
+            );
         }
 
         if args.once {
@@ -251,28 +324,39 @@ async fn run_watch_cycle(
     cache: &ObservationCache,
     ingest: &IngestClient,
     installation_id: Uuid,
+    output_format: OutputFormat,
 ) -> Result<()> {
-    let observations = collect_observations(watches).await?;
+    let observations = collect_observations(watches, output_format).await?;
 
-    if observations.is_empty() {
-        println!(
-            "No matching offers found for providers: {}.",
-            watches
-                .iter()
-                .map(|watch| watch.spec.provider.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    } else {
-        print_observations(watches, &observations);
+    if output_format == OutputFormat::Table {
+        if observations.is_empty() {
+            println!(
+                "No matching offers found for providers: {}.",
+                watches
+                    .iter()
+                    .map(|watch| watch.spec.provider.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        } else {
+            print_observations(watches, &observations);
+        }
     }
 
     cache.insert_observations(&observations).await?;
-    sync_cached_observations(cache, ingest, installation_id).await;
+    let sync = sync_cached_observations(cache, ingest, installation_id, output_format).await;
+
+    if output_format == OutputFormat::Json {
+        print_observations_json(watches, &observations, sync.as_ref())?;
+    }
+
     Ok(())
 }
 
-async fn collect_observations(watches: &[ProviderWatch]) -> Result<Vec<OfferObservation>> {
+async fn collect_observations(
+    watches: &[ProviderWatch],
+    output_format: OutputFormat,
+) -> Result<Vec<OfferObservation>> {
     let mut observations = Vec::new();
     let mut failed_providers = Vec::new();
 
@@ -280,9 +364,12 @@ async fn collect_observations(watches: &[ProviderWatch]) -> Result<Vec<OfferObse
         match watch.provider.search(&watch.spec).await {
             Ok(provider_observations) => observations.extend(provider_observations),
             Err(error) => {
-                println!(
-                    "Provider `{}` failed but other providers will continue: {error:#}",
-                    watch.spec.provider
+                notice(
+                    output_format,
+                    format!(
+                        "Provider `{}` failed but other providers will continue: {error:#}",
+                        watch.spec.provider
+                    ),
                 );
                 failed_providers.push(watch.spec.provider.clone());
             }
@@ -303,14 +390,18 @@ async fn sync_cached_observations(
     cache: &ObservationCache,
     ingest: &IngestClient,
     installation_id: Uuid,
-) {
+    output_format: OutputFormat,
+) -> Option<IngestResult> {
     let token = load_secret(INGEST_TOKEN_USER).ok();
     let pending = match cache.pending_observations(500).await {
-        Ok(pending) if pending.is_empty() => return,
+        Ok(pending) if pending.is_empty() => return None,
         Ok(pending) => pending,
         Err(error) => {
-            println!("could not read cached observations for sync: {error}");
-            return;
+            notice(
+                output_format,
+                format!("could not read cached observations for sync: {error}"),
+            );
+            return None;
         }
     };
 
@@ -324,16 +415,27 @@ async fn sync_cached_observations(
     match ingest.upload_observations(token.as_deref(), &batch).await {
         Ok(result) => {
             if let Err(error) = cache.mark_synced(&pending, chrono::Utc::now()).await {
-                println!("observations uploaded but cache sync marker failed: {error}");
-                return;
+                notice(
+                    output_format,
+                    format!("observations uploaded but cache sync marker failed: {error}"),
+                );
+                return Some(result);
             }
-            println!(
-                "Synced observations: accepted={}, duplicates={}, rejected={}",
-                result.accepted_count, result.duplicate_count, result.rejected_count
+            notice(
+                output_format,
+                format!(
+                    "Synced observations: accepted={}, duplicates={}, rejected={}",
+                    result.accepted_count, result.duplicate_count, result.rejected_count
+                ),
             );
+            Some(result)
         }
         Err(error) => {
-            println!("Observation sync is pending; cached data will retry later: {error}");
+            notice(
+                output_format,
+                format!("Observation sync is pending; cached data will retry later: {error}"),
+            );
+            None
         }
     }
 }
@@ -385,6 +487,10 @@ async fn doctor() -> Result<()> {
     table.add_row(vec![
         Cell::new("Lambda Cloud API key"),
         status_cell(load_secret(LAMBDA_API_KEY_USER).is_ok()),
+    ]);
+    table.add_row(vec![
+        Cell::new("Runpod API key"),
+        status_cell(load_secret(RUNPOD_API_KEY_USER).is_ok()),
     ]);
     table.add_row(vec![
         Cell::new("Ingestion token"),
@@ -457,11 +563,6 @@ fn print_observations(watches: &[ProviderWatch], observations: &[OfferObservatio
             .map(|watch| &watch.spec)
             .unwrap_or(&watches[0].spec);
         let deal = score_deal(spec, observation);
-        let deal_label = if deal.deal_score >= 50.0 {
-            "interesting"
-        } else {
-            "match"
-        };
 
         let mut row = Vec::new();
         if multi_provider {
@@ -480,12 +581,87 @@ fn print_observations(watches: &[ProviderWatch], observations: &[OfferObservatio
             ),
             Cell::new(observation.verified),
             Cell::new(observation.region.as_deref().unwrap_or("unknown")),
-            Cell::new(deal_label),
+            Cell::new(deal_label(&deal)),
         ]);
         table.add_row(row);
     }
 
     println!("{table}");
+}
+
+fn print_observations_json(
+    watches: &[ProviderWatch],
+    observations: &[OfferObservation],
+    sync: Option<&IngestResult>,
+) -> Result<()> {
+    let providers = watches
+        .iter()
+        .map(|watch| watch.spec.provider.clone())
+        .collect::<Vec<_>>();
+    let observations = observations
+        .iter()
+        .map(|observation| {
+            let spec = watches
+                .iter()
+                .find(|watch| {
+                    watch
+                        .spec
+                        .provider
+                        .eq_ignore_ascii_case(&observation.provider)
+                })
+                .map(|watch| &watch.spec)
+                .unwrap_or(&watches[0].spec);
+            observation_to_output(spec, observation)
+        })
+        .collect::<Vec<_>>();
+
+    let output = WatchOutput {
+        providers,
+        observations,
+        sync: sync.cloned(),
+    };
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+fn observation_to_output(
+    spec: &WatchSpec,
+    observation: &OfferObservation,
+) -> WatchObservationOutput {
+    let deal = score_deal(spec, observation);
+    WatchObservationOutput {
+        observation_id: observation.observation_id,
+        observed_at: observation.observed_at.to_rfc3339(),
+        provider: observation.provider.clone(),
+        provider_offer_id: observation.provider_offer_id.clone(),
+        gpu_name: observation.gpu_name.clone(),
+        num_gpus: observation.num_gpus,
+        gpu_ram_gb: observation.gpu_ram_gb,
+        price_usd_per_hour: observation.price_usd_per_hour,
+        reliability_score: observation.reliability_score,
+        verified: observation.verified,
+        rentable: observation.rentable,
+        region: observation.region.clone(),
+        deal_label: deal_label(&deal).to_string(),
+        deal_score: deal.deal_score,
+        deal_reasons: deal.reason_labels,
+    }
+}
+
+fn deal_label(deal: &DealCandidate) -> &'static str {
+    if deal.deal_score >= 50.0 {
+        "interesting"
+    } else {
+        "match"
+    }
+}
+
+fn notice(output_format: OutputFormat, message: impl AsRef<str>) {
+    if output_format == OutputFormat::Json {
+        eprintln!("{}", message.as_ref());
+    } else {
+        println!("{}", message.as_ref());
+    }
 }
 
 fn status_cell(ok: bool) -> Cell {
@@ -514,9 +690,13 @@ async fn try_register_installation(
     paths: &Paths,
     config: &mut AppConfig,
     beta_token: Option<&str>,
+    output_format: OutputFormat,
 ) {
     let Some(installation_id) = config.installation_id else {
-        println!("Ingestion registration is pending: missing local installation id.");
+        notice(
+            output_format,
+            "Ingestion registration is pending: missing local installation id.",
+        );
         return;
     };
 
@@ -525,22 +705,37 @@ async fn try_register_installation(
             Ok(()) => {
                 config.ingestion_registered = true;
                 if let Err(error) = save_config(paths, config) {
-                    println!("Registered ingestion, but failed to update config: {error:#}");
+                    notice(
+                        output_format,
+                        format!("Registered ingestion, but failed to update config: {error:#}"),
+                    );
                 } else {
-                    println!("Registered this install with Capacitor ingestion.");
+                    notice(
+                        output_format,
+                        "Registered this install with Capacitor ingestion.",
+                    );
                 }
             }
             Err(error) => {
                 config.ingestion_registered = false;
-                println!("Ingestion registration is pending: could not store token: {error:#}");
+                notice(
+                    output_format,
+                    format!("Ingestion registration is pending: could not store token: {error:#}"),
+                );
             }
         },
         Err(error) => {
             config.ingestion_registered = false;
             if let Err(save_error) = save_config(paths, config) {
-                println!("Could not persist pending ingestion status: {save_error:#}");
+                notice(
+                    output_format,
+                    format!("Could not persist pending ingestion status: {save_error:#}"),
+                );
             }
-            println!("Ingestion registration is pending and will retry later: {error:#}");
+            notice(
+                output_format,
+                format!("Ingestion registration is pending and will retry later: {error:#}"),
+            );
         }
     }
 }
@@ -572,15 +767,32 @@ fn ensure_parent(path: &Path) -> Result<()> {
 }
 
 fn store_secret(user: &str, value: &str) -> Result<()> {
-    Entry::new(SERVICE_NAME, user)?
-        .set_password(value)
+    match Entry::new(SERVICE_NAME, user)
+        .and_then(|entry| entry.set_password(value))
         .with_context(|| format!("failed to store `{user}` in the OS keychain"))
+    {
+        Ok(()) => Ok(()),
+        Err(keychain_error) => store_secret_file(user, value).with_context(|| {
+            format!("failed to store `{user}` in the OS keychain or local secret file: {keychain_error:#}")
+        }),
+    }
 }
 
 fn load_secret(user: &str) -> Result<String> {
-    Entry::new(SERVICE_NAME, user)?
-        .get_password()
-        .with_context(|| format!("failed to load `{user}` from the OS keychain"))
+    if let Some(env_var) = secret_env_var(user)
+        && let Ok(value) = std::env::var(env_var)
+        && !value.trim().is_empty()
+    {
+        return Ok(value);
+    }
+
+    if let Ok(secret) = Entry::new(SERVICE_NAME, user).and_then(|entry| entry.get_password()) {
+        return Ok(secret);
+    }
+
+    load_secret_file(user).with_context(|| {
+        format!("failed to load `{user}` from environment, OS keychain, or local secret file")
+    })
 }
 
 fn load_provider_secret(primary_user: &str, legacy_users: &[&str]) -> Result<String> {
@@ -597,6 +809,68 @@ fn load_provider_secret(primary_user: &str, legacy_users: &[&str]) -> Result<Str
     }
 
     Err(last_error)
+}
+
+fn secret_env_var(user: &str) -> Option<&'static str> {
+    match user {
+        VAST_API_KEY_USER => Some(VAST_API_KEY_ENV),
+        LAMBDA_API_KEY_USER => Some(LAMBDA_API_KEY_ENV),
+        RUNPOD_API_KEY_USER => Some(RUNPOD_API_KEY_ENV),
+        BETA_TOKEN_USER => Some(BETA_TOKEN_ENV),
+        INGEST_TOKEN_USER => Some(INGEST_TOKEN_ENV),
+        _ => None,
+    }
+}
+
+fn store_secret_file(user: &str, value: &str) -> Result<()> {
+    let path = secret_file_path(user)?;
+    ensure_parent(&path)?;
+    fs::write(&path, value).with_context(|| format!("failed to write {}", path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to secure {}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn load_secret_file(user: &str) -> Result<String> {
+    let path = secret_file_path(user)?;
+    let value =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(anyhow!("{} is empty", path.display()));
+    }
+
+    Ok(value)
+}
+
+fn secret_file_path(user: &str) -> Result<PathBuf> {
+    let dir = if let Ok(dir) = std::env::var(SECRET_DIR_ENV) {
+        PathBuf::from(dir)
+    } else {
+        let dirs = ProjectDirs::from("dev", "capacitor", "cap")
+            .ok_or_else(|| anyhow!("could not resolve local secret directory"))?;
+        dirs.data_local_dir().join("secrets")
+    };
+
+    Ok(dir.join(secret_file_name(user)))
+}
+
+fn secret_file_name(user: &str) -> String {
+    user.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn resolve_provider_names(provider: Option<&str>, providers: Option<&str>) -> Result<Vec<String>> {
@@ -700,6 +974,11 @@ where
                     "missing Lambda Cloud API key; run `cap config set provider.lambda.api-key <token>`",
                 )?);
             }
+            "runpod" => {
+                config.runpod_api_key = Some(load_secret_by_user(RUNPOD_API_KEY_USER).context(
+                    "missing Runpod API key; run `cap config set provider.runpod.api-key <token>`",
+                )?);
+            }
             _ => {
                 return Err(anyhow!(
                     "unknown provider `{provider}`; supported providers: {}",
@@ -769,15 +1048,19 @@ mod tests {
     #[test]
     fn provider_selection_parses_deduped_lists() {
         assert_eq!(
-            resolve_provider_names(None, Some(" vast,lambda,VAST ")).unwrap(),
-            vec!["vast".to_string(), "lambda".to_string()]
+            resolve_provider_names(None, Some(" vast,lambda,runpod,VAST ")).unwrap(),
+            vec![
+                "vast".to_string(),
+                "lambda".to_string(),
+                "runpod".to_string()
+            ]
         );
     }
 
     #[test]
     fn provider_selection_rejects_unknown_provider() {
-        let error = resolve_provider_names(None, Some("vast,runpod")).unwrap_err();
-        assert!(error.to_string().contains("unknown provider `runpod`"));
+        let error = resolve_provider_names(None, Some("vast,gpucloud")).unwrap_err();
+        assert!(error.to_string().contains("unknown provider `gpucloud`"));
     }
 
     #[test]
@@ -788,7 +1071,7 @@ mod tests {
             "--provider",
             "vast",
             "--providers",
-            "vast,lambda",
+            "vast,lambda,runpod",
             "--gpu",
             "H100",
         ]);
@@ -810,19 +1093,90 @@ mod tests {
 
         assert_eq!(config.lambda_api_key.as_deref(), Some("lambda-token"));
         assert!(config.vast_api_key.is_none());
+        assert!(config.runpod_api_key.is_none());
+    }
+
+    #[test]
+    fn provider_config_loads_runpod_provider_secret() {
+        let config = provider_config_for_with_loaders(
+            &["runpod".to_string()],
+            || panic!("vast credential should not be loaded"),
+            |user| {
+                assert_eq!(user, RUNPOD_API_KEY_USER);
+                Ok("runpod-token".to_string())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(config.runpod_api_key.as_deref(), Some("runpod-token"));
+        assert!(config.lambda_api_key.is_none());
+        assert!(config.vast_api_key.is_none());
     }
 
     #[test]
     fn provider_config_loads_all_selected_provider_secrets() {
         let config = provider_config_for_with_loaders(
-            &["vast".to_string(), "lambda".to_string()],
+            &[
+                "vast".to_string(),
+                "lambda".to_string(),
+                "runpod".to_string(),
+            ],
             || Ok("vast-token".to_string()),
-            |_| Ok("lambda-token".to_string()),
+            |user| match user {
+                LAMBDA_API_KEY_USER => Ok("lambda-token".to_string()),
+                RUNPOD_API_KEY_USER => Ok("runpod-token".to_string()),
+                other => panic!("unexpected secret user: {other}"),
+            },
         )
         .unwrap();
 
         assert_eq!(config.vast_api_key.as_deref(), Some("vast-token"));
         assert_eq!(config.lambda_api_key.as_deref(), Some("lambda-token"));
+        assert_eq!(config.runpod_api_key.as_deref(), Some("runpod-token"));
+    }
+
+    #[test]
+    fn observation_json_output_includes_provider_and_deal_label() {
+        let spec = WatchSpec {
+            provider: "lambda".to_string(),
+            gpu_filters: vec!["H100".to_string()],
+            max_price: Some(9.0),
+            verified: true,
+            min_reliability: Some(0.98),
+            min_gpus: None,
+            poll_interval_secs: 60,
+        };
+        let observation = test_observation("lambda", "gpu_1x_h100:us-east-1", "H100", 1, 4.29);
+
+        let output = observation_to_output(&spec, &observation);
+
+        assert_eq!(output.provider, "lambda");
+        assert_eq!(output.gpu_name, "H100");
+        assert_eq!(output.num_gpus, 1);
+        assert_eq!(output.deal_label, "interesting");
+    }
+
+    #[test]
+    fn secret_env_names_cover_container_credentials() {
+        assert_eq!(secret_env_var(VAST_API_KEY_USER), Some(VAST_API_KEY_ENV));
+        assert_eq!(
+            secret_env_var(LAMBDA_API_KEY_USER),
+            Some(LAMBDA_API_KEY_ENV)
+        );
+        assert_eq!(
+            secret_env_var(RUNPOD_API_KEY_USER),
+            Some(RUNPOD_API_KEY_ENV)
+        );
+        assert_eq!(secret_env_var(BETA_TOKEN_USER), Some(BETA_TOKEN_ENV));
+        assert_eq!(secret_env_var(INGEST_TOKEN_USER), Some(INGEST_TOKEN_ENV));
+    }
+
+    #[test]
+    fn secret_file_names_are_filesystem_safe() {
+        assert_eq!(
+            secret_file_name("provider.vast.api-key"),
+            "provider_vast_api-key"
+        );
     }
 
     #[tokio::test]
@@ -846,7 +1200,9 @@ mod tests {
             ),
         ];
 
-        let observations = collect_observations(&watches).await.unwrap();
+        let observations = collect_observations(&watches, OutputFormat::Table)
+            .await
+            .unwrap();
 
         assert_eq!(observations.len(), 2);
         assert!(observations.iter().any(|item| item.provider == "vast"));
@@ -870,7 +1226,9 @@ mod tests {
             ),
         ];
 
-        let observations = collect_observations(&watches).await.unwrap();
+        let observations = collect_observations(&watches, OutputFormat::Table)
+            .await
+            .unwrap();
 
         assert_eq!(observations.len(), 1);
         assert_eq!(observations[0].provider, "lambda");
@@ -883,7 +1241,9 @@ mod tests {
             provider_watch("lambda", Vec::new(), true),
         ];
 
-        let error = collect_observations(&watches).await.unwrap_err();
+        let error = collect_observations(&watches, OutputFormat::Table)
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("all providers failed"));
     }

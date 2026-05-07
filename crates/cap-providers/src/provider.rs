@@ -4,6 +4,7 @@ use cap_core::{OfferObservation, WatchSpec};
 #[derive(Clone, Debug, Default)]
 pub struct ProviderConfig {
     pub lambda_api_key: Option<String>,
+    pub runpod_api_key: Option<String>,
     pub vast_api_key: Option<String>,
 }
 

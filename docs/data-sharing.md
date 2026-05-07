@@ -8,12 +8,15 @@ Single-provider and cross-provider watch commands use the same data-sharing
 path. Cross-provider watches merge normalized observations locally before they
 are cached and synced.
 
-Capacitor does not upload your Vast.ai or Lambda Cloud API keys. Provider
-credentials are stored locally in the operating system keychain.
+Capacitor does not upload your Vast.ai, Lambda Cloud, or Runpod API keys. Provider
+credentials are stored locally in the operating system keychain by default.
+Docker and headless environments can provide credentials through environment
+variables or local secret files instead.
 
 Private beta registration uses `cap init --beta-token <token>`. The beta token
 and backend-minted ingest token are also stored locally in the operating system
-keychain so registration and sync can retry after temporary outages.
+keychain or local fallback secret store so registration and sync can retry
+after temporary outages.
 
 When the ingestion API or network is unavailable, Capacitor temporarily caches
 observations locally and retries sync later. Watching and terminal alerts keep

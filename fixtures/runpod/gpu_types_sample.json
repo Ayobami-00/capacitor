@@ -1,0 +1,32 @@
+{
+  "data": {
+    "gpuTypes": [
+      {
+        "id": "NVIDIA H100 80GB HBM3",
+        "displayName": "NVIDIA H100 80GB HBM3",
+        "memoryInGb": 80,
+        "lowestPrice": {
+          "gpuName": "NVIDIA H100 80GB HBM3",
+          "gpuTypeId": "NVIDIA H100 80GB HBM3",
+          "uninterruptablePrice": 4.29,
+          "stockStatus": "High",
+          "countryCode": "US",
+          "availableGpuCounts": [1, 2, 4, 8]
+        }
+      },
+      {
+        "id": "NVIDIA A100-SXM4-80GB",
+        "displayName": "NVIDIA A100 SXM",
+        "memoryInGb": 80,
+        "lowestPrice": {
+          "gpuName": "NVIDIA A100-SXM4-80GB",
+          "gpuTypeId": "NVIDIA A100-SXM4-80GB",
+          "uninterruptablePrice": 2.2,
+          "stockStatus": "Low",
+          "countryCode": "CA",
+          "availableGpuCounts": [1, 2]
+        }
+      }
+    ]
+  }
+}

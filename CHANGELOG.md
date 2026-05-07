@@ -2,6 +2,19 @@
 
 All notable changes to Capacitor will be documented in this file.
 
+## v0.2.1 - 2026-05-07
+
+### Added
+
+- Added Runpod Secure Cloud watch support through `--provider runpod`.
+- Added `cap config set provider.runpod.api-key <token>` and
+  `CAP_PROVIDER_RUNPOD_API_KEY` for Runpod credentials.
+- Added Runpod GPU type normalization into Capacitor's shared
+  `OfferObservation` model.
+- Added `cap watch --format json` for automation and agent workflows.
+- Added container-friendly credential fallback through environment variables
+  and local secret files when the OS keychain is unavailable.
+
 ## v0.2.0 - 2026-05-01
 
 ### Added

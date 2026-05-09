@@ -16,8 +16,6 @@ pub struct IngestClient {
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
-    #[error("beta token is missing; run `cap init --beta-token <token>`")]
-    MissingBetaToken,
     #[error("ingest token is missing; run `cap init` again")]
     MissingToken,
     #[error("invalid ingest API URL: {0}")]
@@ -50,14 +48,11 @@ impl IngestClient {
     pub async fn register(
         &self,
         registration: &InstallRegistration,
-        beta_token: Option<&str>,
     ) -> Result<RegistrationResponse, IngestError> {
-        let beta_token = beta_token.ok_or(IngestError::MissingBetaToken)?;
         let url = self.base_url.join("/functions/v1/ingest/init")?;
         let response = self
             .client
             .post(url)
-            .header("x-capacitor-beta-token", beta_token)
             .json(registration)
             .send()
             .await?
@@ -112,19 +107,11 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn register_requires_beta_token() {
+    #[test]
+    fn register_endpoint_is_public_init_route() {
         let client = IngestClient::fixed().unwrap();
-        let registration = InstallRegistration {
-            installation_id: Uuid::new_v4(),
-            cli_version: "0.1.0".to_string(),
-            os: "macos".to_string(),
-            arch: "aarch64".to_string(),
-        };
+        let url = client.base_url.join("/functions/v1/ingest/init").unwrap();
 
-        assert!(matches!(
-            client.register(&registration, None).await.unwrap_err(),
-            IngestError::MissingBetaToken
-        ));
+        assert_eq!(url.path(), "/functions/v1/ingest/init");
     }
 }

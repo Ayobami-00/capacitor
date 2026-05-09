@@ -25,12 +25,10 @@ const RUNPOD_API_KEY_USER: &str = "provider.runpod.api-key";
 const LEGACY_PROVIDER_VAST_USER: &str = "provider.vast";
 const LEGACY_VAST_API_KEY_USER: &str = "vast.api-key";
 const INGEST_TOKEN_USER: &str = "ingest.token";
-const BETA_TOKEN_USER: &str = "beta.token";
 const DEFAULT_PROVIDER: &str = "vast";
 const VAST_API_KEY_ENV: &str = "CAP_PROVIDER_VAST_API_KEY";
 const LAMBDA_API_KEY_ENV: &str = "CAP_PROVIDER_LAMBDA_API_KEY";
 const RUNPOD_API_KEY_ENV: &str = "CAP_PROVIDER_RUNPOD_API_KEY";
-const BETA_TOKEN_ENV: &str = "CAPACITOR_BETA_TOKEN";
 const INGEST_TOKEN_ENV: &str = "CAPACITOR_INGEST_TOKEN";
 const SECRET_DIR_ENV: &str = "CAPACITOR_SECRET_DIR";
 
@@ -56,8 +54,8 @@ enum Command {
 
 #[derive(Args, Debug)]
 struct InitArgs {
-    /// Private beta token used to register this install with Capacitor ingestion.
-    #[arg(long)]
+    /// Deprecated compatibility flag. Public registration no longer requires a beta token.
+    #[arg(long, hide = true)]
     beta_token: Option<String>,
 }
 
@@ -212,20 +210,11 @@ async fn init(args: InitArgs) -> Result<()> {
         .await
         .context("failed to initialize local observation cache")?;
 
-    if let Some(beta_token) = args.beta_token.as_deref() {
-        store_secret(BETA_TOKEN_USER, beta_token)?;
+    if args.beta_token.is_some() {
+        println!("Warning: --beta-token is deprecated and no longer required.");
     }
 
-    let beta_token = args
-        .beta_token
-        .or_else(|| load_secret(BETA_TOKEN_USER).ok());
-    try_register_installation(
-        &paths,
-        &mut config,
-        beta_token.as_deref(),
-        OutputFormat::Table,
-    )
-    .await;
+    try_register_installation(&paths, &mut config, OutputFormat::Table).await;
 
     save_config(&paths, &config)?;
 
@@ -289,9 +278,7 @@ async fn watch(args: WatchArgs) -> Result<()> {
 
     loop {
         if !config.ingestion_registered || load_secret(INGEST_TOKEN_USER).is_err() {
-            let beta_token = load_secret(BETA_TOKEN_USER).ok();
-            try_register_installation(&paths, &mut config, beta_token.as_deref(), args.format)
-                .await;
+            try_register_installation(&paths, &mut config, args.format).await;
         }
 
         if let Err(error) = run_watch_cycle(
@@ -497,10 +484,6 @@ async fn doctor() -> Result<()> {
         status_cell(load_secret(INGEST_TOKEN_USER).is_ok()),
     ]);
     table.add_row(vec![
-        Cell::new("Beta token"),
-        status_cell(load_secret(BETA_TOKEN_USER).is_ok()),
-    ]);
-    table.add_row(vec![
         Cell::new("Ingestion registered"),
         status_cell(config.ingestion_registered),
     ]);
@@ -672,7 +655,7 @@ fn status_cell(ok: bool) -> Cell {
     }
 }
 
-async fn register_installation(installation_id: Uuid, beta_token: Option<&str>) -> Result<String> {
+async fn register_installation(installation_id: Uuid) -> Result<String> {
     let ingest = IngestClient::fixed()?;
     let registration = InstallRegistration {
         installation_id,
@@ -680,16 +663,12 @@ async fn register_installation(installation_id: Uuid, beta_token: Option<&str>) 
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
     };
-    Ok(ingest
-        .register(&registration, beta_token)
-        .await?
-        .ingest_token)
+    Ok(ingest.register(&registration).await?.ingest_token)
 }
 
 async fn try_register_installation(
     paths: &Paths,
     config: &mut AppConfig,
-    beta_token: Option<&str>,
     output_format: OutputFormat,
 ) {
     let Some(installation_id) = config.installation_id else {
@@ -700,7 +679,7 @@ async fn try_register_installation(
         return;
     };
 
-    match register_installation(installation_id, beta_token).await {
+    match register_installation(installation_id).await {
         Ok(token) => match store_secret(INGEST_TOKEN_USER, &token) {
             Ok(()) => {
                 config.ingestion_registered = true;
@@ -816,7 +795,6 @@ fn secret_env_var(user: &str) -> Option<&'static str> {
         VAST_API_KEY_USER => Some(VAST_API_KEY_ENV),
         LAMBDA_API_KEY_USER => Some(LAMBDA_API_KEY_ENV),
         RUNPOD_API_KEY_USER => Some(RUNPOD_API_KEY_ENV),
-        BETA_TOKEN_USER => Some(BETA_TOKEN_ENV),
         INGEST_TOKEN_USER => Some(INGEST_TOKEN_ENV),
         _ => None,
     }
@@ -1035,6 +1013,16 @@ mod tests {
     }
 
     #[test]
+    fn init_accepts_deprecated_beta_token_flag() {
+        let cli = Cli::try_parse_from(["cap", "init", "--beta-token", "old-token"]).unwrap();
+
+        match cli.command {
+            Command::Init(args) => assert_eq!(args.beta_token.as_deref(), Some("old-token")),
+            other => panic!("expected init command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn provider_selection_supports_all() {
         assert_eq!(
             resolve_provider_names(Some("all"), None).unwrap(),
@@ -1167,7 +1155,6 @@ mod tests {
             secret_env_var(RUNPOD_API_KEY_USER),
             Some(RUNPOD_API_KEY_ENV)
         );
-        assert_eq!(secret_env_var(BETA_TOKEN_USER), Some(BETA_TOKEN_ENV));
         assert_eq!(secret_env_var(INGEST_TOKEN_USER), Some(INGEST_TOKEN_ENV));
     }
 

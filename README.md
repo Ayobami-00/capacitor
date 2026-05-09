@@ -124,16 +124,13 @@ cap --help
 
 ## Quickstart
 
-During the private beta, Capacitor requires a Capacitor beta token and at least
-one provider API key.
-
-- A Capacitor beta token for ingestion registration
-- A Vast.ai, Lambda Cloud, or Runpod API key for reading provider availability
+Capacitor requires at least one provider API key for reading provider
+availability. Ingestion registration is public and automatic.
 
 Initialize Capacitor:
 
 ```bash
-cap init --beta-token <capacitor-beta-token>
+cap init
 ```
 
 Store your Vast.ai API key:
@@ -267,7 +264,7 @@ the install with Capacitor ingestion, and stores the backend-minted ingest token
 in the OS keychain.
 
 ```bash
-cap init --beta-token <capacitor-beta-token>
+cap init
 ```
 
 ### `cap config set`
@@ -323,10 +320,10 @@ cap doctor
 API. This is part of the product: Capacitor is building public GPU market
 intelligence from observed availability, pricing, and provider metadata.
 
-Capacitor does not upload your Vast.ai, Lambda Cloud, or Runpod API keys. Provider
-credentials are stored locally in your operating system keychain by default.
-For containers and headless environments, the CLI can also read credentials
-from environment variables or local secret files.
+Capacitor does not upload your Vast.ai, Lambda Cloud, or Runpod API keys.
+Provider credentials are stored locally in your operating system keychain by
+default. For containers and headless environments, the CLI can also read
+credentials from environment variables or local secret files.
 
 Container-friendly environment variables:
 
@@ -334,7 +331,6 @@ Container-friendly environment variables:
 CAP_PROVIDER_VAST_API_KEY
 CAP_PROVIDER_LAMBDA_API_KEY
 CAP_PROVIDER_RUNPOD_API_KEY
-CAPACITOR_BETA_TOKEN
 CAPACITOR_INGEST_TOKEN
 CAPACITOR_SECRET_DIR
 ```
@@ -383,6 +379,17 @@ crates/
   cap-cache      # local SQLite cache for pending observation sync
   cap-ingest     # fixed Capacitor ingestion API client
 ```
+
+## v0.2.2 Release
+
+The v0.2.2 release makes Capacitor registration public:
+
+- `cap init` no longer requires a private beta token
+- `cap init --beta-token <token>` remains accepted as a deprecated no-op
+- The ingestion backend now mints install tokens automatically
+- Public docs no longer mention `CAPACITOR_BETA_TOKEN`
+
+See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
 ## v0.2.1 Release
 

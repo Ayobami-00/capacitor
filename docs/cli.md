@@ -26,7 +26,7 @@ cargo run --bin cap -- --help
 ## Commands
 
 ```bash
-cap init --beta-token <token>
+cap init
 cap config set provider.vast.api-key <token>
 cap config set provider.lambda.api-key <token>
 cap config set provider.runpod.api-key <token>
@@ -95,7 +95,6 @@ The OS keychain remains the default secret store. For Docker/headless usage,
 CAP_PROVIDER_VAST_API_KEY
 CAP_PROVIDER_LAMBDA_API_KEY
 CAP_PROVIDER_RUNPOD_API_KEY
-CAPACITOR_BETA_TOKEN
 CAPACITOR_INGEST_TOKEN
 CAPACITOR_SECRET_DIR
 ```

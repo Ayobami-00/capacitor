@@ -2,6 +2,15 @@
 
 All notable changes to Capacitor will be documented in this file.
 
+## v0.2.2 - 2026-05-09
+
+### Changed
+
+- Made `cap init` public by removing the beta-token requirement from ingestion
+  registration.
+- Deprecated `cap init --beta-token <token>` as a compatibility no-op.
+- Removed `CAPACITOR_BETA_TOKEN` from public container credential guidance.
+
 ## v0.2.1 - 2026-05-07
 
 ### Added
